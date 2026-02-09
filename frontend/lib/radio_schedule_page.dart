@@ -75,10 +75,12 @@ class _RadioSchedulePageState extends State<RadioSchedulePage> {
   }
 
   Color _getStatusColor(String status) {
-    if (status.contains("Live") || status.contains("Debate"))
+    if (status.contains("Live") || status.contains("Debate")) {
       return Colors.green[100]!;
-    if (status.contains("Morning") || status.contains("Evening"))
+    }
+    if (status.contains("Morning") || status.contains("Evening")) {
       return Colors.orange[100]!;
+    }
     return Colors.grey[300]!;
   }
 

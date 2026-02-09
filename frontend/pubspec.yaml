@@ -41,6 +41,7 @@ dependencies:
   http: ^1.6.0
   just_audio: ^0.10.5
   timezone: ^0.10.1
+  web_socket_channel: ^3.0.3
 
 dev_dependencies:
   flutter_test:

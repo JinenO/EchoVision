@@ -16,14 +16,18 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
   // --- HELPER: Validate Password Strength ---
   String? _validatePassword(String password) {
     if (password.length < 8) return "Password must be at least 8 characters.";
-    if (!password.contains(RegExp(r'[A-Z]')))
+    if (!password.contains(RegExp(r'[A-Z]'))) {
       return "Need at least one Uppercase letter (A-Z).";
-    if (!password.contains(RegExp(r'[a-z]')))
+    }
+    if (!password.contains(RegExp(r'[a-z]'))) {
       return "Need at least one Lowercase letter (a-z).";
-    if (!password.contains(RegExp(r'[0-9]')))
+    }
+    if (!password.contains(RegExp(r'[0-9]'))) {
       return "Need at least one Number (0-9).";
-    if (!password.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]')))
+    }
+    if (!password.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]'))) {
       return "Need at least one Symbol (!@#\$%...).";
+    }
     return null; // Valid!
   }
 
