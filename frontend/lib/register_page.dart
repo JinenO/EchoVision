@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'widgets.dart';
 import 'verification_page.dart';
 import 'login_page.dart';
+import 'api_service.dart';
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
@@ -12,30 +14,82 @@ class RegisterPage extends StatefulWidget {
 
 class _RegisterPageState extends State<RegisterPage> {
   final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _userController = TextEditingController();
+  final TextEditingController _birthdayController = TextEditingController();
   final TextEditingController _passController = TextEditingController();
   final TextEditingController _confirmController = TextEditingController();
 
-  // --- VALIDATION HELPERS ---
-  bool _isEmailValid(String email) {
+  String? _selectedGender;
+  final Color primaryColor = const Color(0xFF2C3E50);
+
+  // --- NEW: State variables for Password Visibility ---
+  bool _obscurePassword = true;
+  bool _obscureConfirm = true;
+
+  // --- NEW: State variables for Error Messages ---
+  String? _emailError;
+  String? _passwordError;
+  String? _confirmError;
+
+  // --- NEW: Real-time Validation Functions ---
+  void _validateEmail(String value) {
+    if (value.isEmpty) {
+      setState(
+        () => _emailError = null,
+      ); // Don't show error if empty (handled on submit)
+      return;
+    }
     final emailRegex = RegExp(r'^[^@]+@[^@]+\.[^@]+');
-    return emailRegex.hasMatch(email);
+    setState(() {
+      _emailError = emailRegex.hasMatch(value)
+          ? null
+          : "Enter a valid email address";
+    });
   }
 
-  String? _validatePassword(String password) {
-    if (password.length < 8) return "Password must be at least 8 characters.";
-    if (!password.contains(RegExp(r'[A-Z]'))) {
-      return "Need at least one Uppercase letter (A-Z).";
+  void _validatePassword(String value) {
+    if (value.isEmpty) {
+      setState(() => _passwordError = null);
+      return;
     }
-    if (!password.contains(RegExp(r'[a-z]'))) {
-      return "Need at least one Lowercase letter (a-z).";
+    if (value.length < 8) {
+      setState(() => _passwordError = "Must be at least 8 characters.");
+      return;
     }
-    if (!password.contains(RegExp(r'[0-9]'))) {
-      return "Need at least one Number (0-9).";
+    if (!value.contains(RegExp(r'[A-Z]'))) {
+      setState(() => _passwordError = "Need at least one Uppercase letter.");
+      return;
     }
-    if (!password.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]'))) {
-      return "Need at least one Symbol (!@#\$%...).";
+    if (!value.contains(RegExp(r'[a-z]'))) {
+      setState(() => _passwordError = "Need at least one Lowercase letter.");
+      return;
     }
-    return null;
+    if (!value.contains(RegExp(r'[0-9]'))) {
+      setState(() => _passwordError = "Need at least one Number.");
+      return;
+    }
+    if (!value.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]'))) {
+      setState(() => _passwordError = "Need at least one Symbol.");
+      return;
+    }
+    setState(() => _passwordError = null); // Password is valid
+
+    // Re-check confirm password if user edits the main password
+    if (_confirmController.text.isNotEmpty) {
+      _validateConfirmPassword(_confirmController.text);
+    }
+  }
+
+  void _validateConfirmPassword(String value) {
+    if (value.isEmpty) {
+      setState(() => _confirmError = null);
+      return;
+    }
+    setState(() {
+      _confirmError = value == _passController.text
+          ? null
+          : "Passwords do not match";
+    });
   }
 
   @override
@@ -46,7 +100,7 @@ class _RegisterPageState extends State<RegisterPage> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Color(0xFF2C3E50)),
+          icon: Icon(Icons.arrow_back, color: primaryColor),
           onPressed: () => Navigator.pop(context),
         ),
       ),
@@ -54,104 +108,94 @@ class _RegisterPageState extends State<RegisterPage> {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24.0),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              const SizedBox(height: 20),
-              const Text(
+              Text(
                 "Create Account",
                 style: TextStyle(
-                  fontSize: 42,
+                  fontSize: 32,
                   fontWeight: FontWeight.bold,
-                  color: Color(0xFF2C3E50),
+                  color: primaryColor,
                 ),
               ),
-              const SizedBox(height: 10),
-              Text(
-                "Create an account so you can see\nthe stories",
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 22,
-                  color: const Color(0xFF2C3E50).withOpacity(0.6),
+              const SizedBox(height: 30),
+
+              _buildUniformField(
+                controller: _userController,
+                label: "Username",
+              ),
+              const SizedBox(height: 15),
+
+              // EMAIL FIELD (With Validation)
+              _buildUniformField(
+                controller: _emailController,
+                label: "Email",
+                errorText: _emailError,
+                onChanged: _validateEmail,
+              ),
+              const SizedBox(height: 15),
+
+              GestureDetector(
+                onTap: () => _selectDate(context),
+                child: AbsorbPointer(
+                  child: _buildUniformField(
+                    controller: _birthdayController,
+                    label: "Birthday (YYYY-MM-DD)",
+                  ),
                 ),
               ),
+              const SizedBox(height: 15),
+
+              _buildGenderDropdown(),
+              const SizedBox(height: 15),
+
+              // PASSWORD FIELD (With Visibility & Validation)
+              _buildUniformField(
+                controller: _passController,
+                label: "Password",
+                isPassword: _obscurePassword,
+                errorText: _passwordError,
+                onChanged: _validatePassword,
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                    color: primaryColor.withOpacity(0.6),
+                  ),
+                  onPressed: () =>
+                      setState(() => _obscurePassword = !_obscurePassword),
+                ),
+              ),
+              const SizedBox(height: 15),
+
+              // CONFIRM PASSWORD FIELD (With Visibility & Validation)
+              _buildUniformField(
+                controller: _confirmController,
+                label: "Confirm Password",
+                isPassword: _obscureConfirm,
+                errorText: _confirmError,
+                onChanged: _validateConfirmPassword,
+                suffixIcon: IconButton(
+                  icon: Icon(
+                    _obscureConfirm ? Icons.visibility_off : Icons.visibility,
+                    color: primaryColor.withOpacity(0.6),
+                  ),
+                  onPressed: () =>
+                      setState(() => _obscureConfirm = !_obscureConfirm),
+                ),
+              ),
+
               const SizedBox(height: 40),
 
-              // --- EMAIL FIELD (Clean) ---
-              SketchyTextField(
-                hintText: "Email",
-                controller: _emailController,
-                // Removed onTap: ... so you can type!
-              ),
-              const SizedBox(height: 20),
-
-              // --- PASSWORD FIELD (Clean) ---
-              SketchyTextField(
-                hintText: "Password",
-                isPassword: true,
-                controller: _passController,
-                // Removed onTap: ... so you can type!
-              ),
-              const SizedBox(height: 20),
-
-              // --- CONFIRM PASSWORD FIELD (Clean) ---
-              SketchyTextField(
-                hintText: "Confirm Password",
-                isPassword: true,
-                controller: _confirmController,
-                // Removed onTap: ... so you can type!
-              ),
-
-              const SizedBox(height: 50),
-
-              // --- SIGN UP BUTTON ---
               SizedBox(
                 width: double.infinity,
                 child: SketchyButton(
                   text: "Sign up",
                   isPrimary: true,
-                  onTap: () {
-                    // 1. Get Inputs
-                    String email = _emailController.text.trim();
-                    String password = _passController.text.trim();
-                    String confirm = _confirmController.text.trim();
-
-                    // 2. Validate Empty
-                    if (email.isEmpty || password.isEmpty || confirm.isEmpty) {
-                      _showError("Please fill in all fields!");
-                      return;
-                    }
-
-                    // 3. Validate Email
-                    if (!_isEmailValid(email)) {
-                      _showError("Please enter a valid email address.");
-                      return;
-                    }
-
-                    // 4. Validate Password Strength
-                    String? passwordError = _validatePassword(password);
-                    if (passwordError != null) {
-                      _showError(passwordError);
-                      return;
-                    }
-
-                    // 5. Validate Match
-                    if (password != confirm) {
-                      _showError("Passwords do not match!");
-                      return;
-                    }
-
-                    // 6. Success -> Move to Verification
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => VerificationPage(email: email),
-                      ),
-                    );
-                  },
+                  onTap: _handleSignUp,
                 ),
               ),
 
-              const SizedBox(height: 20),
+              const SizedBox(height: 30),
+
               GestureDetector(
                 onTap: () {
                   Navigator.push(
@@ -159,13 +203,23 @@ class _RegisterPageState extends State<RegisterPage> {
                     MaterialPageRoute(builder: (context) => const LoginPage()),
                   );
                 },
-                child: const Text(
-                  "Already have an account",
-                  style: TextStyle(
-                    fontSize: 18,
-                    decoration: TextDecoration.underline,
-                    color: Color(0xFF2C3E50),
-                  ),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      "Already have an account? ",
+                      style: TextStyle(fontSize: 18, color: Color(0xFF2C3E50)),
+                    ),
+                    Text(
+                      "Login",
+                      style: TextStyle(
+                        fontSize: 18,
+                        decoration: TextDecoration.underline,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF5BC0EB),
+                      ),
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 40),
@@ -176,14 +230,174 @@ class _RegisterPageState extends State<RegisterPage> {
     );
   }
 
+  // UPDATED HELPER: Now supports errorText, suffixIcon, and onChanged
+  Widget _buildUniformField({
+    required TextEditingController controller,
+    required String label,
+    bool isPassword = false,
+    String? errorText,
+    Widget? suffixIcon,
+    void Function(String)? onChanged,
+  }) {
+    return TextField(
+      controller: controller,
+      obscureText: isPassword,
+      onChanged: onChanged, // Triggers validation as user types
+      decoration: InputDecoration(
+        labelText: label,
+        errorText: errorText, // Shows red text below field if there is an error
+        suffixIcon: suffixIcon,
+        labelStyle: TextStyle(color: primaryColor.withOpacity(0.6)),
+        floatingLabelStyle: TextStyle(
+          color: primaryColor,
+          fontWeight: FontWeight.bold,
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 16,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: primaryColor, width: 2),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: primaryColor, width: 2.5),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Colors.red, width: 2),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Colors.red, width: 2.5),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGenderDropdown() {
+    return InputDecorator(
+      decoration: InputDecoration(
+        labelText: "Gender",
+        floatingLabelBehavior: FloatingLabelBehavior.always,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: primaryColor, width: 2),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: primaryColor, width: 2.5),
+        ),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: _selectedGender,
+          isExpanded: true,
+          hint: Text(
+            "Select Gender",
+            style: TextStyle(
+              color: primaryColor.withOpacity(0.6),
+              fontSize: 16,
+            ),
+          ),
+          itemHeight: 50,
+          items: ["Male", "Female", "Other"].map((val) {
+            return DropdownMenuItem(
+              value: val,
+              child: Text(val, style: TextStyle(color: primaryColor)),
+            );
+          }).toList(),
+          onChanged: (val) => setState(() => _selectedGender = val),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _selectDate(BuildContext context) async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: DateTime(2000),
+      firstDate: DateTime(1950),
+      lastDate: DateTime.now(),
+    );
+    if (picked != null) {
+      setState(
+        () =>
+            _birthdayController.text = DateFormat('yyyy-MM-dd').format(picked),
+      );
+    }
+  }
+
+  void _handleSignUp() async {
+    final email = _emailController.text.trim();
+    final password = _passController.text.trim();
+    final username = _userController.text.trim();
+    final birthday = _birthdayController.text.trim(); // Get birthday text
+
+    // 1. Check for empty fields (Added birthday check)
+    if (email.isEmpty ||
+        password.isEmpty ||
+        username.isEmpty ||
+        _selectedGender == null ||
+        birthday.isEmpty) {
+      _showError("Please fill in all fields, including Gender and Birthday!");
+      return;
+    }
+
+    // 2. Check for active errors
+    if (_emailError != null ||
+        _passwordError != null ||
+        _confirmError != null) {
+      _showError("Please fix the errors in the form before submitting.");
+      return;
+    }
+
+    // --- NEW: Show a loading circle while waiting for the server ---
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    // --- NEW: Wrap the API call in a try-catch block ---
+    try {
+      bool success = await ApiService.register(
+        email: email,
+        password: password,
+        username: username,
+        gender: _selectedGender!,
+        birthday: birthday,
+      );
+
+      // Close the loading circle
+      Navigator.pop(context);
+
+      if (success) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => VerificationPage(email: email),
+          ),
+        );
+      } else {
+        _showError("Registration failed. Email might already be taken.");
+      }
+    } catch (e) {
+      // Close the loading circle if an error happens
+      Navigator.pop(context);
+
+      // Print the exact error to the terminal so you can read it
+      print("CRASH AVOIDED - API Error: $e");
+      _showError("Network error: Could not connect to the server.");
+    }
+  }
   void _showError(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
+        content: Text(message, style: const TextStyle(color: Colors.white)),
         backgroundColor: Colors.redAccent,
-        content: Text(
-          message,
-          style: const TextStyle(fontSize: 16, color: Colors.white),
-        ),
       ),
     );
   }
