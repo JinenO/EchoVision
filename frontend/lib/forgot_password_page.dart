@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'widgets.dart';
-import 'verification_page.dart'; // To verify the code
-import 'reset_password_page.dart'; // The final destination
+import 'reset_password_page.dart';
+import 'verification_page.dart'; // <--- ADDED MISSING IMPORT
+import 'api_service.dart';
 
 class ForgotPasswordPage extends StatefulWidget {
   const ForgotPasswordPage({super.key});
@@ -13,7 +14,6 @@ class ForgotPasswordPage extends StatefulWidget {
 class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   final TextEditingController _emailController = TextEditingController();
 
-  // --- HELPER: Validate Email Format ---
   bool _isEmailValid(String email) {
     final emailRegex = RegExp(r'^[^@]+@[^@]+\.[^@]+');
     return emailRegex.hasMatch(email);
@@ -32,14 +32,12 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
         ),
       ),
       body: SingleChildScrollView(
-        // Allow scrolling on small screens
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               const SizedBox(height: 40),
-              // Icon
               const Icon(
                 Icons.lock_reset_rounded,
                 size: 80,
@@ -67,47 +65,58 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
 
               const SizedBox(height: 40),
 
-              // --- EMAIL INPUT (Typing Enabled) ---
               SketchyTextField(
                 hintText: "Enter your Email",
                 controller: _emailController,
-                // No onTap -> Typing enabled!
               ),
 
               const SizedBox(height: 50),
 
-              // --- SEND CODE BUTTON ---
               SizedBox(
                 width: double.infinity,
                 child: SketchyButton(
                   text: "Send Code",
                   isPrimary: true,
-                  onTap: () {
+                  onTap: () async {
                     String email = _emailController.text.trim();
 
-                    // 1. Check Empty
                     if (email.isEmpty) {
                       _showError("Please enter your email!");
                       return;
                     }
-
-                    // 2. Check Valid Email
                     if (!_isEmailValid(email)) {
                       _showError("Please enter a valid email address.");
                       return;
                     }
 
-                    // 3. SUCCESS -> Navigate to Verification
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => VerificationPage(
-                          email: email,
-                          targetPage:
-                              const ResetPasswordPage(), // Destination after code
-                        ),
-                      ),
+                    // 1. Show Loading
+                    showDialog(
+                      context: context,
+                      barrierDismissible: false,
+                      builder: (context) =>
+                          const Center(child: CircularProgressIndicator()),
                     );
+
+                    // 2. Call API
+                    bool success = await ApiService.requestPasswordReset(email);
+
+                    // 3. Hide Loading
+                    if (mounted) Navigator.pop(context);
+
+                    // 4. Navigate on Success to the Verification Page
+                    if (success) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => VerificationPage(
+                            email: email,
+                            isPasswordReset: true, // This flag now works!
+                          ),
+                        ),
+                      );
+                    } else {
+                      _showError("Failed to connect to the server.");
+                    }
                   },
                 ),
               ),
@@ -118,7 +127,6 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
     );
   }
 
-  // Helper for Red Error Message
   void _showError(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(

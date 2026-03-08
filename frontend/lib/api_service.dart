@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 
 class ApiService {
@@ -106,6 +107,179 @@ class ApiService {
     } catch (e) {
       print("API Fetch Error: $e");
       return null;
+    }
+  }
+
+  // --- NEW: Update Text Data ---
+  static Future<bool> updateProfile({
+    String? username,
+    String? birthday,
+    String? gender,
+  }) async {
+    if (currentToken == null) return false;
+    try {
+      final response = await http
+          .put(
+            Uri.parse("$baseUrl/users/me"),
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer $currentToken",
+            },
+            body: jsonEncode({
+              "username": username,
+              "birthday": birthday,
+              "gender": gender,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      return response.statusCode == 200;
+    } catch (e) {
+      print("Update Profile Error: $e");
+      return false;
+    }
+  }
+
+  // --- NEW: Upload Image File (Accepts Original too) ---
+  static Future<bool> uploadProfilePicture(
+    File croppedImage, [
+    File? originalImage,
+  ]) async {
+    if (currentToken == null) return false;
+    try {
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse("$baseUrl/users/me/upload-profile-picture"),
+      );
+      request.headers.addAll({"Authorization": "Bearer $currentToken"});
+
+      // 1. Attach the small cropped file
+      request.files.add(
+        await http.MultipartFile.fromPath('file', croppedImage.path),
+      );
+
+      // 2. Attach the MASSIVE original file (if it exists)
+      if (originalImage != null) {
+        request.files.add(
+          await http.MultipartFile.fromPath(
+            'original_file',
+            originalImage.path,
+          ),
+        );
+      }
+
+      var streamedResponse = await request.send();
+      return streamedResponse.statusCode == 200;
+    } catch (e) {
+      print("Upload Image Error: $e");
+      return false;
+    }
+  }
+
+  // --- Request Password Reset Code ---
+  static Future<bool> requestPasswordReset(String email) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse("$baseUrl/users/forgot-password"),
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode({"email": email}),
+          )
+          .timeout(const Duration(seconds: 10));
+      return response.statusCode == 200;
+    } catch (e) {
+      print("Forgot Password Error: $e");
+      return false;
+    }
+  }
+
+  // --- Submit Code and New Password ---
+  static Future<bool> resetPassword(
+    String email,
+    String code,
+    String newPassword,
+  ) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse("$baseUrl/users/reset-password"),
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode({
+              "email": email,
+              "code": code,
+              "new_password": newPassword,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      return response.statusCode == 200;
+    } catch (e) {
+      print("Reset Password Error: $e");
+      return false;
+    }
+  }
+
+  // --- NEW: Logged-in Change Password ---
+  static Future<bool> changePassword(
+    String currentPassword,
+    String newPassword,
+  ) async {
+    if (currentToken == null) return false;
+    try {
+      final response = await http
+          .put(
+            Uri.parse("$baseUrl/users/me/password"),
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer $currentToken",
+            },
+            body: jsonEncode({
+              "current_password": currentPassword,
+              "new_password": newPassword,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      return response.statusCode == 200;
+    } catch (e) {
+      print("Change Password Error: $e");
+      return false;
+    }
+  }
+
+  // --- NEW: Verify Code BEFORE Resetting ---
+  static Future<bool> verifyResetCode(String email, String code) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse("$baseUrl/users/verify-reset-code"),
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode({"email": email, "code": code}),
+          )
+          .timeout(const Duration(seconds: 10));
+      return response.statusCode == 200;
+    } catch (e) {
+      print("Verify Code Error: $e");
+      return false;
+    }
+  }
+
+  // --- NEW: Check Current Password Before Unlocking ---
+  static Future<bool> verifyCurrentPassword(String currentPassword) async {
+    if (currentToken == null) return false;
+    try {
+      final response = await http
+          .post(
+            Uri.parse("$baseUrl/users/me/verify-password"),
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer $currentToken",
+            },
+            body: jsonEncode({"current_password": currentPassword}),
+          )
+          .timeout(const Duration(seconds: 10));
+      return response.statusCode == 200;
+    } catch (e) {
+      print("Verify Current Password Error: $e");
+      return false;
     }
   }
 }

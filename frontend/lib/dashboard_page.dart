@@ -4,16 +4,50 @@ import 'profile_page.dart';
 import 'uploads_page.dart';
 import 'tv_page.dart';
 import 'radio_page.dart';
+import 'api_service.dart'; // <--- MUST IMPORT API
 
-class DashboardPage extends StatelessWidget {
+class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
+
+  @override
+  State<DashboardPage> createState() => _DashboardPageState();
+}
+
+class _DashboardPageState extends State<DashboardPage> {
+  // --- Variables to hold database data ---
+  String _username = "User";
+  String _email = "Loading...";
+  String _profilePicture = "default_avatar.png";
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserData(); // Fetch data when dashboard opens
+  }
+
+  Future<void> _loadUserData() async {
+    try {
+      final data = await ApiService.getUserProfile();
+
+      if (data != null && mounted) {
+        setState(() {
+          _username = data["username"]?.toString() ?? "User";
+          _email = data["email"]?.toString() ?? "No Email";
+          _profilePicture =
+              data["profile_picture"]?.toString() ?? "default_avatar.png";
+        });
+      }
+    } catch (e) {
+      print("Error loading dashboard data: $e");
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
 
-      // --- TOP BAR (Hello User) ---
+      // --- TOP BAR (Hello Dynamic User) ---
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
@@ -25,43 +59,38 @@ class DashboardPage extends StatelessWidget {
         title: Padding(
           padding: const EdgeInsets.only(top: 10),
           child: Text(
-            "Hello User!",
-            style: TextStyle(
+            "Hello $_username!", // <--- DYNAMIC USERNAME
+            style: const TextStyle(
               fontSize: 36,
               fontWeight: FontWeight.bold,
-              color: const Color(0xFF2C3E50),
+              color: Color(0xFF2C3E50),
             ),
           ),
         ),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 20, top: 10),
-            // We use PopupMenuButton instead of GestureDetector now
             child: PopupMenuButton<String>(
-              offset: const Offset(
-                0,
-                65,
-              ), // <--- Moves the menu down so it's under the image
+              offset: const Offset(0, 65), // Moves the menu down
               tooltip: 'Show Menu',
-              elevation: 0, // No default shadow, we prefer the sketchy border
-              // --- Style the Menu Box ---
+              elevation: 0,
               color: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(15),
-                side: const BorderSide(
-                  color: Color(0xFF2C3E50),
-                  width: 2,
-                ), // Sketchy border
+                side: const BorderSide(color: Color(0xFF2C3E50), width: 2),
               ),
-
-              // --- Handle Menu Clicks ---
               onSelected: (value) {
                 if (value == 'profile') {
                   Navigator.push(
                     context,
                     MaterialPageRoute(builder: (_) => const ProfilePage()),
-                  );
+                  ).then((_) {
+                    // Refresh data when returning from Profile page
+                    // in case they changed their name or picture!
+                    _loadUserData();
+                  });
                 } else if (value == 'logout') {
+                  ApiService.currentToken = null; // Clear backend token
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(builder: (_) => const LoginPage()),
@@ -69,7 +98,7 @@ class DashboardPage extends StatelessWidget {
                 }
               },
 
-              // --- The Trigger Image (Kept exactly the same scale!) ---
+              // --- The Trigger Image (Dynamic Profile Picture) ---
               child: Container(
                 width: 60,
                 height: 60,
@@ -83,34 +112,44 @@ class DashboardPage extends StatelessWidget {
                 ),
                 child: ClipOval(
                   child: Transform.scale(
-                    scale: 1.5, // <--- Scale is preserved here
-                    child: Image.asset(
-                      'assets/images/profile.png',
-                      fit: BoxFit.cover,
-                    ),
+                    scale: 1.5,
+                    child: _profilePicture == "default_avatar.png"
+                        ? Image.asset(
+                            'assets/images/profile.png',
+                            fit: BoxFit.cover,
+                          )
+                        : Image.network(
+                            _profilePicture,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) =>
+                                Image.asset(
+                                  'assets/images/profile.png',
+                                  fit: BoxFit.cover,
+                                ),
+                          ),
                   ),
                 ),
               ),
 
               // --- The Menu Items ---
               itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-                // 1. Header (Non-clickable info)
+                // 1. Header (Dynamic Info)
                 PopupMenuItem<String>(
-                  enabled: false, // Cannot click this header
+                  enabled: false,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        "EchoUser",
-                        style: TextStyle(
+                        _username, // <--- DYNAMIC USERNAME
+                        style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
-                          color: const Color(0xFF2C3E50),
+                          color: Color(0xFF2C3E50),
                         ),
                       ),
                       Text(
-                        "echo@cat.com",
-                        style: TextStyle(
+                        _email, // <--- DYNAMIC EMAIL
+                        style: const TextStyle(
                           fontSize: 14,
                           color: Colors.grey,
                         ),
@@ -120,38 +159,32 @@ class DashboardPage extends StatelessWidget {
                   ),
                 ),
                 // 2. View Profile Option
-                PopupMenuItem<String>(
+                const PopupMenuItem<String>(
                   value: 'profile',
                   child: Row(
                     children: [
-                      const Icon(
-                        Icons.account_circle,
-                        color: Color(0xFF5BC0EB),
-                      ),
-                      const SizedBox(width: 10),
+                      Icon(Icons.account_circle, color: Color(0xFF5BC0EB)),
+                      SizedBox(width: 10),
                       Text(
                         "View Profile",
                         style: TextStyle(
                           fontSize: 18,
-                          color: const Color(0xFF2C3E50),
+                          color: Color(0xFF2C3E50),
                         ),
                       ),
                     ],
                   ),
                 ),
                 // 3. Logout Option
-                PopupMenuItem<String>(
+                const PopupMenuItem<String>(
                   value: 'logout',
                   child: Row(
                     children: [
-                      const Icon(Icons.logout, color: Colors.redAccent),
-                      const SizedBox(width: 10),
+                      Icon(Icons.logout, color: Colors.redAccent),
+                      SizedBox(width: 10),
                       Text(
                         "Logout",
-                        style: TextStyle(
-                          fontSize: 18,
-                          color: Colors.redAccent,
-                        ),
+                        style: TextStyle(fontSize: 18, color: Colors.redAccent),
                       ),
                     ],
                   ),
@@ -162,8 +195,7 @@ class DashboardPage extends StatelessWidget {
         ],
       ),
 
-      // --- BOTTOM NAVIGATION BAR (From your sketch) ---
-      // --- BOTTOM NAVIGATION BAR (Home is Active) ---
+      // --- BOTTOM NAVIGATION BAR ---
       bottomNavigationBar: Container(
         height: 80,
         decoration: const BoxDecoration(
@@ -173,12 +205,11 @@ class DashboardPage extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
-            // Inside bottomNavigationBar
             _NavItem(
               icon: Icons.upload_file,
               label: "Upload",
               onTap: () {
-                Navigator.push(
+                Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(builder: (_) => const UploadsPage()),
                 );
@@ -188,18 +219,18 @@ class DashboardPage extends StatelessWidget {
               icon: Icons.radio,
               label: "Radio",
               onTap: () {
-                Navigator.push(
+                Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(builder: (_) => const RadioPage()),
                 );
               },
             ),
 
-            // --- ACTIVE TAB: HOME (Big, Blue, No Text) ---
+            // --- ACTIVE TAB: HOME ---
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFF5BC0EB), // Blue
+                color: const Color(0xFF5BC0EB),
                 borderRadius: BorderRadius.circular(15),
                 border: Border.all(color: const Color(0xFF2C3E50), width: 2),
               ),
@@ -210,19 +241,18 @@ class DashboardPage extends StatelessWidget {
               icon: Icons.tv,
               label: "TV",
               onTap: () {
-                Navigator.push(
+                Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(builder: (_) => const TvPage()),
                 );
               },
             ),
 
-            // --- INACTIVE TAB: PROFILE (Normal with Text) ---
             _NavItem(
               icon: Icons.person,
               label: "Profile",
               onTap: () {
-                Navigator.push(
+                Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(builder: (_) => const ProfilePage()),
                 );
@@ -245,7 +275,6 @@ class DashboardPage extends StatelessWidget {
             imagePath: "assets/images/uploads.png",
             color: const Color(0xFFE3F2FD),
             onTap: () {
-              // Navigate to Uploads Page
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (context) => const UploadsPage()),
@@ -260,7 +289,7 @@ class DashboardPage extends StatelessWidget {
             title: "Radio Stream",
             subtitle: "Watch to live world news",
             imagePath: "assets/images/radio.png",
-            color: const Color(0xFFFFF3E0), // Light Orange
+            color: const Color(0xFFFFF3E0),
             imageScale: 1.3,
             onTap: () {
               Navigator.push(
@@ -277,9 +306,8 @@ class DashboardPage extends StatelessWidget {
             title: "TV Demo",
             subtitle: "Watch with AI captions",
             imagePath: "assets/images/tv.png",
-            color: const Color(0xFFE3F2FD), // Light Blue
+            color: const Color(0xFFE3F2FD),
             imageScale: 2.0,
-            // TV Card onTap:
             onTap: () {
               Navigator.push(
                 context,
@@ -317,11 +345,10 @@ class SketchyCard extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        height: 180, // Big card like sketch
+        height: 180,
         decoration: BoxDecoration(
           color: color,
           border: Border.all(color: const Color(0xFF2C3E50), width: 2),
-          // Sketchy border radius (wobbly)
           borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(20),
             topRight: Radius.circular(5),
@@ -338,7 +365,6 @@ class SketchyCard extends StatelessWidget {
         ),
         child: Row(
           children: [
-            // Left Side: Text
             Expanded(
               flex: 4,
               child: Padding(
@@ -349,10 +375,10 @@ class SketchyCard extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 28,
                         fontWeight: FontWeight.bold,
-                        color: const Color(0xFF2C3E50),
+                        color: Color(0xFF2C3E50),
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -367,8 +393,6 @@ class SketchyCard extends StatelessWidget {
                 ),
               ),
             ),
-
-            // Right Side: The Cat Image
             Expanded(
               flex: 3,
               child: Padding(
@@ -404,10 +428,7 @@ class _NavItem extends StatelessWidget {
           Icon(icon, color: const Color(0xFF2C3E50), size: 28),
           Text(
             label,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-            ),
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
           ),
         ],
       ),

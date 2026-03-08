@@ -1,8 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from jose import JWTError, jwt
+
+import shutil #Used to save the file
+import uuid #Used to generate unique file names
 
 # Import from your main app folder
 from app import models, schemas, utils, email_service
@@ -160,52 +163,128 @@ async def update_user_profile(
     await db.refresh(current_user)
     return current_user
 
-# --- 6. UPDATE PASSWORD (Dedicated Endpoint) ---
-@router.put("/me/password")
-async def finalize_password_update(
-    password_data: schemas.PasswordUpdateWithCode, 
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+# --- LOGGED IN: Change Password (Requires Current Password) ---
+# --- LOGGED IN STEP 1: Just verify the current password ---
+@router.post("/me/verify-password")
+async def verify_current_password(
+    req: schemas.VerifyPasswordRequest, 
+    current_user: models.User = Depends(get_current_user)
 ):
-    # The code is sent again from the Flutter 'Verify' screen state
-    if current_user.verification_code != password_data.code:
-        raise HTTPException(status_code=400, detail="Session expired or invalid code")
-    
-    if not utils.verify_password(password_data.current_password, current_user.hashed_password):
+    if not utils.verify_password(req.current_password, current_user.hashed_password):
         raise HTTPException(status_code=400, detail="Incorrect current password")
     
-    current_user.hashed_password = utils.hash_password(password_data.new_password)
-    current_user.verification_code = None  # NOW we clear it
-    await db.commit()
-    
-    return {"message": "Password updated successfully"}
+    return {"message": "Password is correct."}
 
-@router.post("/password-reset-request")
-async def request_password_reset(
-    current_user: models.User = Depends(get_current_user), 
-    db: Session = Depends(get_db)
-):
-    # 1. Generate a new 6-digit code
-    reset_code = utils.generate_verification_code()
-    
-    # 2. Save it to the user's record in the database
-    current_user.verification_code = reset_code
-    await db.commit()
-    
-    # 3. Send the email
-    email_service.send_verification_email(current_user.email, reset_code)
-    
-    return {"message": "Verification code sent to your email."}
-
-@router.post("/password-reset/verify")
-async def verify_password_reset_code(
-    code_data: schemas.VerifyCodeRequest, # Just { "code": "123456" }
+@router.put("/me/password")
+async def change_password(
+    pass_data: schemas.ChangePasswordRequest, 
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if current_user.verification_code != code_data.code:
-        raise HTTPException(status_code=400, detail="Invalid verification code")
+    # Verify the old password
+    if not utils.verify_password(pass_data.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Incorrect current password")
     
-    # Logic: Instead of clearing the code, we keep it as a 'token' 
-    # or just return success so Flutter knows it can move to the next screen.
-    return {"status": "verified", "message": "Code correct. You may now change your password."}
+    # Save the new password
+    current_user.hashed_password = utils.hash_password(pass_data.new_password)
+    await db.commit()
+    return {"message": "Password updated successfully"}
+
+# --- LOGGED OUT STEP 2: Verify the Code First ---
+@router.post("/verify-reset-code")
+async def verify_reset_code(req: schemas.VerifyResetCodeRequest, db: Session = Depends(get_db)):
+    query = select(models.User).where(models.User.email == req.email)
+    result = await db.execute(query)
+    user = result.scalar_one_or_none()
+    
+    if not user or user.verification_code != req.code:
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+        
+    return {"message": "Code verified successfully."}
+
+# --- LOGGED OUT STEP 3: Save New Password ---
+@router.post("/reset-password")
+async def reset_password(request: schemas.ResetPasswordRequest, db: Session = Depends(get_db)):
+    query = select(models.User).where(models.User.email == request.email)
+    result = await db.execute(query)
+    user = result.scalar_one_or_none()
+    
+    # Double check the code just in case
+    if not user or user.verification_code != request.code:
+        raise HTTPException(status_code=400, detail="Invalid session or code")
+        
+    user.hashed_password = utils.hash_password(request.new_password)
+    user.verification_code = None # Clear the code so it can't be reused
+    await db.commit()
+    return {"message": "Password reset successfully."}
+
+# --- 7. UPLOAD PROFILE PICTURE (NON-DESTRUCTIVE CROP) ---
+@router.post("/me/upload-profile-picture")
+async def upload_profile_picture(
+    file: UploadFile = File(...),
+    original_file: UploadFile = File(None), # NEW: Accepts the uncropped version!
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    file_extension = file.filename.split(".")[-1].lower()
+    allowed_extensions = ["jpg", "jpeg", "png", "gif", "webp"]
+    
+    if file_extension not in allowed_extensions:
+        raise HTTPException(status_code=400, detail="File extension not allowed.")
+
+    # Create one shared unique ID for both files
+    unique_id = uuid.uuid4().hex[:8]
+    cropped_filename = f"user_{current_user.id}_{unique_id}.{file_extension}"
+    
+    # 1. Save the small cropped picture
+    with open(f"uploads/profile_pics/{cropped_filename}", "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    # 2. Save the MASSIVE ORIGINAL picture with a predictable name!
+    if original_file:
+        original_filename = f"user_{current_user.id}_{unique_id}_original.{file_extension}"
+        with open(f"uploads/profile_pics/{original_filename}", "wb") as buffer:
+            shutil.copyfileobj(original_file.file, buffer)
+
+    file_url = f"http://127.0.0.1:8000/uploads/profile_pics/{cropped_filename}"
+
+    current_user.profile_picture = file_url
+    await db.commit()
+    await db.refresh(current_user)
+
+    return {"message": "Profile picture updated successfully", "profile_picture": file_url}
+    
+# --- FORGOT PASSWORD: Send the Code ---
+@router.post("/forgot-password")
+async def forgot_password(request: schemas.ForgotPasswordRequest, db: Session = Depends(get_db)):
+    query = select(models.User).where(models.User.email == request.email)
+    result = await db.execute(query)
+    user = result.scalar_one_or_none()
+    
+    # If the user exists, generate a code and email it
+    if user:
+        reset_code = utils.generate_verification_code()
+        user.verification_code = reset_code
+        await db.commit()
+        email_service.send_verification_email(user.email, reset_code)
+        
+    # Always return a success message to prevent attackers from guessing emails
+    return {"message": "If the email is registered, a code has been sent."}
+
+# --- RESET PASSWORD: Verify Code & Save New Password ---
+@router.post("/reset-password")
+async def reset_password(request: schemas.ResetPasswordRequest, db: Session = Depends(get_db)):
+    query = select(models.User).where(models.User.email == request.email)
+    result = await db.execute(query)
+    user = result.scalar_one_or_none()
+    
+    # Check if user exists AND if the code matches
+    if not user or user.verification_code != request.code:
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+        
+    # Success! Hash the new password, save it, and clear the code
+    user.hashed_password = utils.hash_password(request.new_password)
+    user.verification_code = None
+    await db.commit()
+    
+    return {"message": "Password reset successfully."}
