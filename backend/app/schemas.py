@@ -95,3 +95,22 @@ class PasswordUpdateWithCode(BaseModel):
 # --- NEW: Password Reset Verification ---
 class VerifyCodeRequest(BaseModel):
     code: str  # This handles the 6-digit code from the email
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    code: str
+    new_password: str
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+class VerifyResetCodeRequest(BaseModel):
+    email: EmailStr
+    code: str
+
+class VerifyPasswordRequest(BaseModel):
+    current_password: str

@@ -2,13 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'widgets.dart';
 import 'login_page.dart';
+import 'reset_password_page.dart'; // <--- NEEDED FOR PASSWORD ROUTING
 import 'api_service.dart';
 
 class VerificationPage extends StatefulWidget {
   final String email;
-  final Widget? targetPage;
+  final bool isPasswordReset; // <--- ADDED THIS VARIABLE
 
-  const VerificationPage({super.key, required this.email, this.targetPage});
+  const VerificationPage({
+    super.key,
+    required this.email,
+    this.isPasswordReset = false, // Defaults to false for normal registration
+  });
 
   @override
   State<VerificationPage> createState() => _VerificationPageState();
@@ -26,7 +31,6 @@ class _VerificationPageState extends State<VerificationPage> {
 
   @override
   void dispose() {
-    // Clean up memory when page is closed
     for (var controller in _controllers) {
       controller.dispose();
     }
@@ -63,7 +67,9 @@ class _VerificationPageState extends State<VerificationPage> {
               const SizedBox(height: 20),
 
               Text(
-                "Verify Email",
+                widget.isPasswordReset
+                    ? "Verify Reset Code"
+                    : "Verify Email", // <--- Dynamic Title
                 style: TextStyle(
                   fontSize: 42,
                   fontWeight: FontWeight.bold,
@@ -117,7 +123,7 @@ class _VerificationPageState extends State<VerificationPage> {
                 child: SketchyButton(
                   text: "Verify",
                   isPrimary: true,
-                  onTap: _handleVerify, // Call the backend function!
+                  onTap: _handleVerify,
                 ),
               ),
             ],
@@ -127,7 +133,6 @@ class _VerificationPageState extends State<VerificationPage> {
     );
   }
 
-  // Helper Widget for a single number box
   Widget _buildCodeBox(int index) {
     return SizedBox(
       width: 45,
@@ -137,17 +142,15 @@ class _VerificationPageState extends State<VerificationPage> {
         focusNode: _focusNodes[index],
         keyboardType: TextInputType.number,
         textAlign: TextAlign.center,
-        maxLength: 1, // Only 1 character allowed
+        maxLength: 1,
         style: TextStyle(
           fontSize: 24,
           fontWeight: FontWeight.bold,
           color: primaryColor,
         ),
-        inputFormatters: [
-          FilteringTextInputFormatter.digitsOnly,
-        ], // Block letters
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
         decoration: InputDecoration(
-          counterText: "", // Hides the "0/1" text below the box
+          counterText: "",
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
             borderSide: BorderSide(color: primaryColor, width: 2),
@@ -158,12 +161,9 @@ class _VerificationPageState extends State<VerificationPage> {
           ),
         ),
         onChanged: (value) {
-          // If user types a number, jump to the next box
           if (value.isNotEmpty && index < 5) {
             _focusNodes[index + 1].requestFocus();
-          }
-          // If user deletes a number, jump back to the previous box
-          else if (value.isEmpty && index > 0) {
+          } else if (value.isEmpty && index > 0) {
             _focusNodes[index - 1].requestFocus();
           }
         },
@@ -171,9 +171,7 @@ class _VerificationPageState extends State<VerificationPage> {
     );
   }
 
-  // Handle the backend link
   void _handleVerify() async {
-    // Combine all 6 boxes into one string
     String code = _controllers.map((c) => c.text).join();
 
     if (code.length != 6) {
@@ -181,40 +179,46 @@ class _VerificationPageState extends State<VerificationPage> {
       return;
     }
 
-    // Show loading spinner
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (context) => const Center(child: CircularProgressIndicator()),
     );
 
-    // Call the Backend!
-    bool success = await ApiService.verifyEmail(
-      email: widget.email,
-      code: code,
-    );
+    // --- LOGIC SPLIT: Is it a password reset or normal verification? ---
+    if (widget.isPasswordReset) {
+      bool success = await ApiService.verifyResetCode(widget.email, code);
+      if (mounted) Navigator.pop(context);
 
-    // Close loading spinner
-    Navigator.pop(context);
-
-    if (success) {
-      _showSuccess("Verified Successfully! You can now log in.");
-
-      // Navigate to Login Page
-      if (widget.targetPage != null) {
-        Navigator.push(
+      if (success) {
+        // Correct code! Go to new password page
+        Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (context) => widget.targetPage!),
+          MaterialPageRoute(
+            builder: (context) =>
+                ResetPasswordPage(email: widget.email, code: code),
+          ),
         );
       } else {
+        _showError("Invalid or expired reset code.");
+      }
+    } else {
+      bool success = await ApiService.verifyEmail(
+        email: widget.email,
+        code: code,
+      );
+      if (mounted) Navigator.pop(context);
+
+      if (success) {
+        _showSuccess("Verified Successfully! You can now log in.");
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(builder: (context) => const LoginPage()),
           (route) => false,
         );
+      } else {
+        _showError("Wrong code! Please try again.");
       }
-    } else {
-      _showError("Wrong code! Please try again.");
     }
   }
 

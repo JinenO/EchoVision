@@ -50,8 +50,7 @@ class _ProfilePageState extends State<ProfilePage> {
               _birthday = DateFormat('dd MMMM yyyy').format(parsedDate);
             } catch (dateError) {
               print("Date Parsing Error: $dateError");
-              _birthday = data["birthday"]
-                  .toString(); // Fallback to raw string if parsing fails
+              _birthday = data["birthday"].toString(); // Fallback to raw string
             }
           } else {
             _birthday = "No Birthday Set";
@@ -76,6 +75,16 @@ class _ProfilePageState extends State<ProfilePage> {
         });
       }
     }
+  }
+
+  // --- NEW: WhatsApp-style Full Screen Navigation ---
+  void _showEnlargedImage() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => FullScreenImageViewer(imageUrl: _profilePicture),
+      ),
+    );
   }
 
   @override
@@ -114,34 +123,42 @@ class _ProfilePageState extends State<ProfilePage> {
                 ),
                 child: Column(
                   children: [
-                    // --- PROFILE PICTURE ---
-                    Container(
-                      width: 120,
-                      height: 120,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: const Color(0xFF2C3E50),
-                          width: 3,
-                        ),
-                      ),
-                      child: ClipOval(
-                        child: Transform.scale(
-                          scale: 1.3,
-                          child: _profilePicture == "default_avatar.png"
-                              ? Image.asset(
-                                  'assets/images/profile.png',
-                                  fit: BoxFit.cover,
-                                )
-                              : Image.network(
-                                  _profilePicture,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) =>
-                                      Image.asset(
-                                        'assets/images/profile.png',
-                                        fit: BoxFit.cover,
-                                      ),
-                                ),
+                    // --- PROFILE PICTURE (With Hero Animation) ---
+                    GestureDetector(
+                      onTap: _showEnlargedImage,
+                      child: Hero(
+                        tag:
+                            'profile_pic_animation', // <--- Magic animation tag
+                        child: Container(
+                          width: 120,
+                          height: 120,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: const Color(0xFF2C3E50),
+                              width: 3,
+                            ),
+                          ),
+                          child: ClipOval(
+                            child: Transform.scale(
+                              scale: 1.3,
+                              child: _profilePicture == "default_avatar.png"
+                                  ? Image.asset(
+                                      'assets/images/profile.png',
+                                      fit: BoxFit.cover,
+                                    )
+                                  : Image.network(
+                                      _profilePicture,
+                                      fit: BoxFit.cover,
+                                      errorBuilder:
+                                          (context, error, stackTrace) =>
+                                              Image.asset(
+                                                'assets/images/profile.png',
+                                                fit: BoxFit.cover,
+                                              ),
+                                    ),
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -245,13 +262,20 @@ class _ProfilePageState extends State<ProfilePage> {
                       width: 200,
                       child: SketchyButton(
                         text: "Edit Profile",
-                        onTap: () {
-                          Navigator.push(
+                        onTap: () async {
+                          final result = await Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (context) => const EditProfilePage(),
                             ),
                           );
+
+                          if (result == true) {
+                            setState(() {
+                              _isLoading = true;
+                            });
+                            _loadProfileData();
+                          }
                         },
                       ),
                     ),
@@ -381,6 +405,46 @@ class _BottomIcon extends StatelessWidget {
           style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
         ),
       ],
+    );
+  }
+}
+
+// --- NEW: FULL SCREEN IMAGE VIEWER CLASS ---
+// This acts as a separate page with a black background, just like messaging apps.
+class FullScreenImageViewer extends StatelessWidget {
+  final String imageUrl;
+
+  const FullScreenImageViewer({super.key, required this.imageUrl});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black, // Sleek black background
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white), // White back arrow
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          panEnabled: true,
+          minScale: 1.0,
+          maxScale: 4.0, // Still allows pinching to zoom
+          child: Hero(
+            tag: 'profile_pic_animation', // MUST match the tag in ProfilePage
+            child: imageUrl == "default_avatar.png"
+                ? Image.asset('assets/images/profile.png', fit: BoxFit.contain)
+                : Image.network(
+                    imageUrl,
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) => Image.asset(
+                      'assets/images/profile.png',
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+          ),
+        ),
+      ),
     );
   }
 }

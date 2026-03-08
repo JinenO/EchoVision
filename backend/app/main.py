@@ -14,9 +14,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# Create and Mount directories so files are accessible via URL
+# --- UPDATED: Create main folders AND subfolders ---
 os.makedirs("uploads", exist_ok=True)
+os.makedirs("uploads/profile_pics", exist_ok=True) # <-- NEW: Dedicated folder for avatars
 os.makedirs("static", exist_ok=True)
+
+# Mount directories so files are accessible via URL
+# Note: Because we mount the root "uploads", the avatars will be accessible 
+# at http://127.0.0.1:8000/uploads/profile_pics/filename.png
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
