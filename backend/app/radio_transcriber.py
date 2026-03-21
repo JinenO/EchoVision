@@ -28,7 +28,7 @@ vad = webrtcvad.Vad(2)
 # --- TUNING ---
 MAX_SCORE = 50           
 MUSIC_THRESHOLD = 40     
-STARTUP_SCORE = -200     # Deeper negative buffer for startup (Fixed "Start" bug)
+STARTUP_SCORE = -200     
 
 # Hallucination Filter
 GHOST_WORDS = {
@@ -49,8 +49,7 @@ async def transcribe_radio_stream(url: str, websocket: WebSocket):
         await safe_send(websocket, "❌ Error: Server has no AI Model loaded.")
         return
 
-    if not await safe_send(websocket, "📡 Connecting to Radio Tower..."):
-        return
+    if not await safe_send(websocket, "📡 Connecting to Radio Tower...") : return
 
     process = subprocess.Popen(
         [
@@ -68,10 +67,11 @@ async def transcribe_radio_stream(url: str, websocket: WebSocket):
     is_music_mode = False
     buffer = b"" 
     frames_processed = 0
+    
+    last_partial = "" 
 
     try:
-        if not await safe_send(websocket, "👂 Listening..."):
-            return 
+        if not await safe_send(websocket, "👂 Listening..."): return 
         
         while True:
             chunk = await loop.run_in_executor(None, process.stdout.read, 4000)
@@ -83,13 +83,15 @@ async def transcribe_radio_stream(url: str, websocket: WebSocket):
                 buffer = buffer[FRAME_SIZE:] 
                 frames_processed += 1
 
-                # Heartbeat
+                # --- NEW: Calculate exact audio timestamp! ---
+                # 960 bytes / 32000 bytes per second = 0.03 seconds per frame
+                current_audio_time = frames_processed * 0.03 
+
                 if frames_processed % 50 == 0:
                     try:
                         if websocket.client_state.name == "DISCONNECTED": raise WebSocketDisconnect()
                     except: pass
 
-                # --- VAD ---
                 try:
                     is_speech = vad.is_speech(frame, 16000)
                 except:
@@ -98,35 +100,44 @@ async def transcribe_radio_stream(url: str, websocket: WebSocket):
                 found_human_activity = False
 
                 if is_speech:
-                    # 1. CHECK FOR FULL SENTENCE (The "Final" Result)
+                    # 1. CHECK FOR FULL SENTENCE (Final Result)
                     if rec.AcceptWaveform(frame):
                         result = json.loads(rec.Result())
                         text = result.get("text", "").strip()
+                        
                         if text and not (len(text.split()) == 1 and text.lower() in GHOST_WORDS):
-                            print(f"📝 Speech: {text}")
+                            print(f"📝 Final: {text}")
                             found_human_activity = True
-                            if not await safe_send(websocket, text):
+                            last_partial = "" 
+                            
+                            # --- NEW: Attach Timestamp and Status! ---
+                            result["audio_time"] = current_audio_time
+                            result["is_final"] = True
+                            if not await safe_send(websocket, json.dumps(result)):
                                 raise WebSocketDisconnect()
                     
-                    # 2. CHECK FOR PARTIAL WORDS (The "Thinking" Result) <--- NEW FIX
-                    # Even if the sentence isn't done, is the AI seeing words?
+                    # 2. CHECK FOR PARTIAL WORDS (Live Typing Result)
                     else:
                         partial_result = json.loads(rec.PartialResult())
                         partial_text = partial_result.get("partial", "").strip()
                         
-                        # If AI sees "partial" words, we count it as Human Activity!
                         if partial_text and len(partial_text) > 2: 
-                             # We don't send this text (it flickers), 
-                             # but we use it to KILL the Music Timer.
                              found_human_activity = True
+                             
+                             if partial_text != last_partial:
+                                 last_partial = partial_text
+                                 
+                                 # --- NEW: Attach Timestamp and Status! ---
+                                 partial_result["audio_time"] = current_audio_time
+                                 partial_result["is_final"] = False
+                                 if not await safe_send(websocket, json.dumps(partial_result)):
+                                     raise WebSocketDisconnect()
 
                 # --- SCORING LOGIC ---
                 if found_human_activity:
-                    # Reset bucket to negative (Safety Buffer)
                     music_score = -50 
                     is_music_mode = False
                 else:
-                    # Only fill bucket if VAD=False AND AI sees NO partial words
                     music_score += 1
                 
                 if music_score > MAX_SCORE: music_score = MAX_SCORE

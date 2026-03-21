@@ -1,9 +1,12 @@
+import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:web_socket_channel/web_socket_channel.dart'; // AI Connection
+import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:just_audio/just_audio.dart';
 import '../models/radio_station.dart';
 import '../services/radio_service.dart';
-import '../services/audio_manager.dart'; // Import your Singleton Manager
-// Import your other pages for the bottom bar
+import '../services/audio_manager.dart';
 import 'dashboard_page.dart';
 import 'uploads_page.dart';
 import 'tv_page.dart';
@@ -18,41 +21,121 @@ class RadioPage extends StatefulWidget {
 }
 
 class _RadioPageState extends State<RadioPage> {
-  // --- CONFIGURATION ---
-  // Use 127.0.0.1 because of 'adb reverse tcp:8000 tcp:8000'
   static const String _serverIp = '127.0.0.1';
   static const String _wsUrl = 'ws://$_serverIp:8000/ws/radio';
 
   final RadioService _radioService = RadioService();
   final AudioManager _audioManager = AudioManager();
-
-  // SCROLL CONTROLLER (To auto-scroll the transcript)
   final ScrollController _scrollController = ScrollController();
 
   List<RadioStation> _stations = [];
   bool _isLoading = true;
   String _selectedFilter = "All";
 
-  // Player State
   RadioStation? _currentStation;
   bool _isPlaying = false;
-
-  // AI Transcription State
+  bool _isBuffering = false; // <--- NEW: Tracks network drops
   WebSocketChannel? _channel;
-  List<String> _transcriptHistory = []; // We keep a LIST of sentences now
+
+  List<String> _transcriptHistory = [];
+  String _liveCaption = "";
   bool _isTranscribing = false;
+
+  double _syncDelaySeconds = 3.0;
+  List<Map<String, dynamic>> _subtitleQueue = [];
+
+  final Stopwatch _audioStopwatch = Stopwatch();
+  Timer? _syncTimer;
 
   @override
   void initState() {
     super.initState();
     _fetchStations();
+    _loadSavedSyncDelay();
+
+    // 1. Listen exactly to what the Android Audio Player is doing
+    _audioManager.player.playerStateStream.listen((state) {
+      if (!mounted) return;
+
+      setState(() {
+        _isPlaying = state.playing;
+        // If the internet drops, tell the UI we are buffering!
+        _isBuffering =
+            (state.processingState == ProcessingState.buffering ||
+            state.processingState == ProcessingState.loading);
+      });
+
+      // The stopwatch ONLY ticks if audio is physically coming out of the speakers
+      if (state.playing && state.processingState == ProcessingState.ready) {
+        _audioStopwatch.start();
+      } else {
+        _audioStopwatch.stop();
+      }
+    });
+
+    _syncTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      _processSubtitleQueue();
+    });
   }
 
   @override
   void dispose() {
+    _syncTimer?.cancel();
+    _audioStopwatch.stop();
     _disconnectAI();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  // --- THE BULLETPROOF QUEUE PROCESSOR ---
+  void _processSubtitleQueue() {
+    if (!_isTranscribing || _subtitleQueue.isEmpty) return;
+
+    // How much audio has actually played on this device
+    double currentAudioTime = _audioStopwatch.elapsedMilliseconds / 1000.0;
+    bool uiNeedsUpdate = false;
+
+    // Pop the text ONLY when the Audio Time overtakes the (Arrival Time + Slider Delay)
+    // This makes it completely immune to internet drops!
+    while (_subtitleQueue.isNotEmpty &&
+        currentAudioTime >= _subtitleQueue.first['time'] + _syncDelaySeconds) {
+      var caption = _subtitleQueue.removeAt(0);
+
+      if (caption['isFinal'] == true) {
+        _transcriptHistory.add(caption['text']);
+        _liveCaption = "";
+        uiNeedsUpdate = true;
+      } else {
+        _liveCaption = caption['text'];
+        uiNeedsUpdate = true;
+      }
+    }
+
+    if (uiNeedsUpdate && mounted) {
+      setState(() {});
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollController.hasClients) {
+          _scrollController.animateTo(
+            _scrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 100),
+            curve: Curves.linear,
+          );
+        }
+      });
+    }
+  }
+
+  Future<void> _loadSavedSyncDelay() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _syncDelaySeconds = prefs.getDouble('saved_sync_delay') ?? 3.0;
+    });
+  }
+
+  Future<void> _saveSyncDelay(double value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('saved_sync_delay', value);
   }
 
   Future<void> _fetchStations() async {
@@ -73,49 +156,41 @@ class _RadioPageState extends State<RadioPage> {
     }
   }
 
-  // --- ROBUST PLAY LOGIC ---
-  // --- AUTO-START PLAY LOGIC ---
+  // --- THE PERFECTED PLAY/STOP LOGIC ---
   Future<void> _playStation(RadioStation station) async {
-    // 1. FORCE STOP EVERYTHING (Reset)
+    bool wasPlayingThis = (_currentStation == station && _isPlaying);
+
+    // 1. Always Hard-Stop the audio and AI first
     _disconnectAI();
     await _audioManager.player.stop();
 
-    // 2. CHECK: Did the user tap the SAME station to stop it?
-    if (_currentStation == station && _isPlaying) {
+    // 2. If they just wanted to stop the current station, clear UI and exit!
+    if (wasPlayingThis) {
       setState(() {
-        _isPlaying = false;
-        _isTranscribing = false;
-        // Optional: Leave the text so they can read what they just heard
+        _currentStation = null;
       });
       return;
     }
 
-    // 3. START NEW STATION & AUTO-START AI
+    // 3. Otherwise, set up the new station
     setState(() {
       _currentStation = station;
       _isPlaying = true;
-
-      // Auto-set this to true so the UI shows the "Stop AI" button immediately
       _isTranscribing = true;
-
-      // Wipe old text
       _transcriptHistory.clear();
-      _transcriptHistory.add("Waiting for audio...");
+      _liveCaption = "";
+      _transcriptHistory.add("Connecting to AI...");
     });
 
     try {
-      // 4. Play Audio
       await _audioManager.playStation(station.url);
-
-      // 5. START AI AUTOMATICALLY (The Magic Line)
       _startTranscription();
     } catch (e) {
       print("Error playing station: $e");
-      // If audio fails, we must cancel the AI too
       _disconnectAI();
       setState(() {
         _isPlaying = false;
-        _transcriptHistory.add("❌ Error: Could not play station.");
+        _currentStation = null;
       });
 
       ScaffoldMessenger.of(
@@ -123,20 +198,12 @@ class _RadioPageState extends State<RadioPage> {
       ).showSnackBar(SnackBar(content: Text("Cannot play ${station.name}")));
     }
   }
-  // --- AI LOGIC (Updated for Scrolling) ---
-  void _toggleAI() {
-    if (_isTranscribing) {
-      _disconnectAI();
-    } else {
-      _startTranscription();
-    }
-  }
 
   void _startTranscription() {
     if (_currentStation == null) return;
 
-    // Note: We don't need setState() here because we already did it in _playStation
-    // But we keep the connection logic.
+    _audioStopwatch.reset();
+    _subtitleQueue.clear();
 
     try {
       _channel = WebSocketChannel.connect(Uri.parse(_wsUrl));
@@ -144,23 +211,43 @@ class _RadioPageState extends State<RadioPage> {
 
       _channel!.stream.listen(
         (message) {
-          setState(() {
-            _transcriptHistory.add(message);
-          });
-          // Auto-scroll
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (_scrollController.hasClients) {
-              _scrollController.animateTo(
-                _scrollController.position.maxScrollExtent,
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeOut,
-              );
+          if (!mounted || !_isTranscribing) return;
+
+          try {
+            final data = jsonDecode(message);
+
+            // Ignore Python's time completely! Tag with Flutter's local arrival time.
+            double arrivalTime = _audioStopwatch.elapsedMilliseconds / 1000.0;
+
+            if (data.containsKey('audio_time') ||
+                data.containsKey('text') ||
+                data.containsKey('partial')) {
+              _subtitleQueue.add({
+                'time': arrivalTime, // <-- Local Time Tag
+                'isFinal': data['is_final'] ?? false,
+                'text': data['is_final'] ? data['text'] : data['partial'],
+              });
             }
-          });
+          } catch (e) {
+            setState(() {
+              if (message == "[[MUSIC_MODE]]") {
+                _transcriptHistory.add("🎵 Playing Music...");
+              } else {
+                _transcriptHistory.add(message);
+              }
+              _liveCaption = "";
+            });
+          }
         },
-        onError: (e) =>
-            setState(() => _transcriptHistory.add("❌ Error: Check Server")),
-        onDone: () => setState(() => _isTranscribing = false),
+        onError: (e) {
+          if (_isTranscribing)
+            setState(() => _transcriptHistory.add("❌ Error: Check Server"));
+        },
+        onDone: () {
+          if (mounted && _channel != null) {
+            setState(() => _isTranscribing = false);
+          }
+        },
       );
     } catch (e) {
       print("AI Connection Error: $e");
@@ -174,7 +261,9 @@ class _RadioPageState extends State<RadioPage> {
     }
     setState(() {
       _isTranscribing = false;
-      _transcriptHistory.add("🛑 Transcription Stopped");
+      _liveCaption = "";
+      _transcriptHistory.clear();
+      _subtitleQueue.clear();
     });
   }
 
@@ -220,7 +309,6 @@ class _RadioPageState extends State<RadioPage> {
 
       body: Column(
         children: [
-          // 1. FILTER BUTTONS
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 15.0),
             child: Row(
@@ -247,55 +335,140 @@ class _RadioPageState extends State<RadioPage> {
             ),
           ),
 
-          // 2. SCROLLABLE TRANSCRIPT BOX (Replaces the old single-line box)
-          // Only shows when there is history or transcription is active
-          if (_transcriptHistory.isNotEmpty || _isTranscribing)
-            Container(
-              height:
-                  200, // Fixed height so it doesn't push everything off screen
-              margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.black87,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.yellowAccent.withOpacity(0.5)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    "LIVE TRANSCRIPT HISTORY",
-                    style: TextStyle(
-                      color: Colors.grey,
-                      fontSize: 10,
-                      letterSpacing: 2,
-                      fontWeight: FontWeight.bold,
+          if (_isTranscribing)
+            Column(
+              children: [
+                Container(
+                  height: 200,
+                  margin: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.black87,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: Colors.yellowAccent.withOpacity(0.5),
                     ),
                   ),
-                  const Divider(color: Colors.grey),
-                  Expanded(
-                    child: ListView.builder(
-                      controller: _scrollController,
-                      itemCount: _transcriptHistory.length,
-                      itemBuilder: (context, index) {
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 2.0),
-                          child: Text(
-                            _transcriptHistory[index],
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            "LIVE TRANSCRIPT",
+                            style: TextStyle(
+                              color: Colors.grey,
+                              fontSize: 10,
+                              letterSpacing: 2,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
-                        );
-                      },
-                    ),
+                          // Optional: Show queue size for debugging
+                          // Text("${_subtitleQueue.length} words queued", style: TextStyle(color: Colors.grey, fontSize: 10)),
+                        ],
+                      ),
+                      const Divider(color: Colors.grey),
+                      Expanded(
+                        child: ListView.builder(
+                          controller: _scrollController,
+                          // Add 1 extra slot for either the live caption OR the buffering message
+                          itemCount:
+                              _transcriptHistory.length +
+                              (_liveCaption.isNotEmpty || _isBuffering ? 1 : 0),
+                          itemBuilder: (context, index) {
+                            // Render the history lines normally
+                            if (index < _transcriptHistory.length) {
+                              return Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 2.0,
+                                ),
+                                child: Text(
+                                  _transcriptHistory[index],
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              );
+                            }
+
+                            // If we are at the bottom, show Buffering OR Live Text
+                            if (_isBuffering) {
+                              return const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 2.0),
+                                child: Text(
+                                  "[Buffering network connection...]",
+                                  style: TextStyle(
+                                    color: Colors.orange,
+                                    fontSize: 16,
+                                    fontStyle: FontStyle.italic,
+                                  ),
+                                ),
+                              );
+                            } else if (_liveCaption.isNotEmpty) {
+                              return Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 2.0,
+                                ),
+                                child: Text(
+                                  _liveCaption,
+                                  style: const TextStyle(
+                                    color: Colors.yellowAccent,
+                                    fontSize: 16,
+                                    fontStyle: FontStyle.italic,
+                                  ),
+                                ),
+                              );
+                            }
+                            return const SizedBox.shrink();
+                          },
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 15.0),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.timer, color: Colors.grey, size: 18),
+                      const SizedBox(width: 5),
+                      Text(
+                        "Sync: ${_syncDelaySeconds.toStringAsFixed(1)}s",
+                        style: const TextStyle(
+                          color: Colors.grey,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Expanded(
+                        child: Slider(
+                          value: _syncDelaySeconds,
+                          min: 0.0,
+                          max: 20.0,
+                          divisions: 40,
+                          activeColor: const Color(0xFF5BC0EB),
+                          inactiveColor: Colors.grey[300],
+                          onChanged: (value) {
+                            setState(() {
+                              _syncDelaySeconds = value;
+                            });
+                          },
+                          onChangeEnd: (value) {
+                            _saveSyncDelay(value);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
 
-          // 3. STATION LIST
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
@@ -369,9 +542,12 @@ class _RadioPageState extends State<RadioPage> {
                             IconButton(
                               icon: Icon(
                                 isPlayingThis && _isPlaying
-                                    ? Icons.pause_circle_filled
+                                    ? Icons
+                                          .stop_circle // <--- Clear STOP Icon
                                     : Icons.play_circle_fill,
-                                color: const Color(0xFF5BC0EB),
+                                color: isPlayingThis
+                                    ? Colors.redAccent
+                                    : const Color(0xFF5BC0EB),
                                 size: 40,
                               ),
                               onPressed: () => _playStation(station),
@@ -383,7 +559,6 @@ class _RadioPageState extends State<RadioPage> {
                   ),
           ),
 
-          // 4. MINI PLAYER
           if (_currentStation != null)
             Container(
               padding: const EdgeInsets.all(15),
@@ -408,20 +583,13 @@ class _RadioPageState extends State<RadioPage> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  // --- AI BUTTON ---
-                  ElevatedButton.icon(
-                    onPressed: _toggleAI,
-                    icon: Icon(
-                      _isTranscribing ? Icons.stop : Icons.closed_caption,
-                      size: 18,
+                  IconButton(
+                    icon: const Icon(
+                      Icons.stop_circle, // <--- Clear STOP Icon
+                      color: Colors.redAccent,
+                      size: 40,
                     ),
-                    label: Text(_isTranscribing ? "Stop AI" : "Transcribe"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _isTranscribing
-                          ? Colors.redAccent
-                          : const Color(0xFF5BC0EB),
-                      foregroundColor: Colors.white,
-                    ),
+                    onPressed: () => _playStation(_currentStation!),
                   ),
                 ],
               ),
@@ -429,7 +597,6 @@ class _RadioPageState extends State<RadioPage> {
         ],
       ),
 
-      // BOTTOM BAR
       bottomNavigationBar: Container(
         height: 80,
         decoration: const BoxDecoration(
@@ -486,7 +653,6 @@ class _RadioPageState extends State<RadioPage> {
   }
 }
 
-// Helper Widgets
 class _FilterButton extends StatelessWidget {
   final String text;
   final bool isSelected;
